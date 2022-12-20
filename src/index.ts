@@ -1,53 +1,58 @@
-import { Context, Markup, Scenes, Telegraf } from "telegraf";
+import { Context, Telegraf } from "telegraf";
 import { TELEGRAF_BOT_TOKEN } from "./env";
-import LocalSession from "telegraf-session-local";
+import Parser from "./parser";
 
 // @ts-ignore
 import Calendar from "telegraf-calendar-telegram";
 
-const bot = new Telegraf<SceneContextMessageUpdate>(
-  TELEGRAF_BOT_TOKEN as string
-);
-const localSession = new LocalSession({ database: "data/local.json" });
+const bot = new Telegraf(TELEGRAF_BOT_TOKEN as string);
+const calendar = new Calendar(bot);
+const parser = new Parser();
 
-bot.use(localSession.middleware());
-
-const baseScene = new Scenes.BaseScene("base_scene");
-
-baseScene.enter((context) => {
-  context.reply("Base scene");
-});
-
-const stage = new Scenes.Stage([baseScene]);
-
-bot.use(stage.middleware());
-
-// Start bot
 bot.start((context) => {
-  context.scene.enter("base_scene");
+  context.reply("Hello");
 });
 
-// // Start tracking
-// bot.command("start_tracking", (context) =>
-//   context.reply(
-//     "Введите по какое число включительно вы хотите искать свободные слоты",
-//     calendar.getCalendar()
-//   )
-// );
+bot.command("starttracking", (context) => {
+  const today = new Date();
+  const maxDate = new Date();
+  maxDate.setMonth(today.getMonth() + 2);
+  maxDate.setDate(today.getDate());
 
-// calendar.setDateListener((context: Context, date: string) => {
-//   context.reply(date);
-// });
+  context.reply(
+    "Введите по какое число включительно вы хотите искать свободные слоты",
+    calendar.setMinDate(today).setMaxDate(maxDate).getCalendar()
+  );
+});
 
-// // Help
-// bot.help((ctx) => {
-//   ctx.reply(
-//     "Send /start to receive a greeting\n" +
-//       "Send /start_tracking to start tracking available slots\n" +
-//       "Send /stop_tracking to start tracking available slots\n" +
-//       "Send /quit to stop the bot"
-//   );
-// });
+bot.command("stoptracking", (context) => {
+  parser.unsubscribe(context.chat.id);
+  context.reply("You successfully canceled subscription");
+});
+
+calendar.setDateListener((context: Context, date: string) => {
+  context.reply("You successfully subscribed!");
+
+  parser.subscribe({
+    chatId: context.chat?.id!,
+    date: new Date(date),
+    callback: notifyUser,
+  });
+});
+
+const notifyUser = (chatId: number, availableDates: Date[]) => {
+  bot.telegram.sendMessage(chatId, "Successfully found such available dates:");
+  bot.telegram.sendMessage(chatId, availableDates.toString());
+};
+
+bot.help((ctx) => {
+  ctx.reply(
+    "Send /start to receive a greeting\n" +
+      "Send /starttracking to start tracking available slots\n" +
+      "Send /stoptracking to stop tracking available slots\n" +
+      "Send /quit to stop the bot"
+  );
+});
 
 bot.command("quit", (ctx) => {
   ctx.telegram.leaveChat(ctx.message.chat.id);
@@ -55,6 +60,12 @@ bot.command("quit", (ctx) => {
 });
 
 bot.launch();
+parser.start();
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+const stop = (code: string) => {
+  bot.stop(code);
+  parser.stop();
+};
+
+process.once("SIGINT", () => stop("SIGINT"));
+process.once("SIGTERM", () => stop("SIGTERM"));
