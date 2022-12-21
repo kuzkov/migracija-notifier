@@ -10,7 +10,7 @@ const calendar = new Calendar(bot);
 const parser = new Parser();
 
 bot.start((context) => {
-  context.reply("Hello");
+  context.reply("Добрый день");
 });
 
 bot.command("starttracking", (context) => {
