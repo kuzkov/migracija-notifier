@@ -1,49 +1,65 @@
 import fetch from "node-fetch";
-
-// FIXME: Extract into a separate file with api
-const endpoint =
-  "https://www.migracija.lt/external/tickets/classif/KL45_10/KL02_87/dates";
-
-const fetchDates = async () => {
-  return (await fetch(`${endpoint}?t=${Date.now()}`).then((res) =>
-    res.json()
-  )) as string[];
-};
+import storage from "node-persist";
+import { Institution, VisitType, fetchDates } from "./api";
 
 interface Subscription {
+  institution: Institution;
+  visitType: VisitType;
   chatId: number;
   date: Date;
-  callback: (chatId: Subscription["chatId"], availableDates: Date[]) => void;
 }
+
+type ResolveCallback = (chatId: number, availableDates: Date[]) => void;
+
+type RejectCallback = (chatId: number) => void;
+
 export default class Parser {
-  private subscriptions: Subscription[] = [];
   private intervalId?: ReturnType<typeof setInterval>;
 
-  subscribe(subscription: Subscription) {
-    this.subscriptions.push(subscription);
+  constructor(
+    private resolve: ResolveCallback,
+    private reject: RejectCallback
+  ) {
+    this.init();
   }
 
-  unsubscribe(chatId: Subscription["chatId"]) {
-    this.subscriptions = this.subscriptions.filter(
-      (subscription) => subscription.chatId !== chatId
-    );
+  async init() {
+    await storage.init();
+    this.startInterval();
   }
 
-  start() {
+  async subscribe(subscription: Subscription) {
+    await storage.setItem(subscription.chatId.toString(), subscription);
+  }
+
+  async unsubscribe(chatId: Subscription["chatId"]) {
+    await storage.removeItem(chatId.toString());
+  }
+
+  private startInterval() {
     this.intervalId = setInterval(async () => {
-      // FIXME: Extract fetch and date deserialization into a separate function
-      const result = await fetchDates();
-      const dates = result.map((rawDate) => new Date(rawDate));
+      await storage.forEach(async ({ value }) => {
+        const chatId = value.chatId as number;
+        const subscription = await storage.getItem(chatId.toString());
+        const visitType = subscription.visitType;
+        const institutionCode = subscription.institution.key;
 
-      // FIXME: Mutation of the subscriptions array is used inside foreach
-      // that's why spread operator is used here
-      [...this.subscriptions].forEach(({ date, chatId, callback }) => {
-        const filteredDates = dates.filter(
-          (currentDate) => currentDate <= date
-        );
+        const date = new Date(value.date);
+        const now = new Date();
+
+        const dates = await fetchDates(visitType, institutionCode);
+
+        const filteredDates = dates
+          .map((currentDate) => new Date(currentDate))
+          .filter((currentDate) => currentDate <= date);
 
         if (filteredDates.length) {
-          callback(chatId, filteredDates);
+          this.resolve(chatId, filteredDates);
+          this.unsubscribe(chatId);
+        }
+
+        if (now >= date) {
+          this.reject(chatId);
           this.unsubscribe(chatId);
         }
       });
